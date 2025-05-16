@@ -21,7 +21,7 @@ class ObservabilityStack(Stack):
         # define stack exports
         CfnOutput(
             self,
-            id='backend-monitoring-topic',
+            id='backend-monitoring-topic-output',
             value=backend_monitoring_topic.topic_arn,
             export_name='BackendMonitoringTopicArn',
         )

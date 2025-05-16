@@ -85,16 +85,22 @@ class ModerationStack(Stack):
             dest=aws_s3_notifications.SqsDestination(queue=upload_sqs)
         )
 
-        self.create_start_moderation_lambda_function(
-            source_queue=upload_sqs,
-            monitoring_topic=backend_monitoring_topic,
-        )
-
-        self.create_text_moderation_workflow(
+        # Create text and image moderation workflows first
+        text_moderation_workflow = self.create_text_moderation_workflow(
             human_workflow_arn=human_workflow_arn
         )
 
-        self.create_image_moderation_workflow(upload_bucket=upload_bucket)
+        image_moderation_workflow = self.create_image_moderation_workflow(
+            upload_bucket=upload_bucket
+        )
+
+        self.create_start_moderation_lambda_function(
+            source_queue=upload_sqs,
+            monitoring_topic=backend_monitoring_topic,
+            upload_bucket=upload_bucket,
+            text_workflow=text_moderation_workflow,
+            image_workflow=image_moderation_workflow
+        )
 
     def create_image_moderation_workflow(
         self, upload_bucket: aws_s3.IBucket
@@ -405,6 +411,9 @@ class ModerationStack(Stack):
         self,
         source_queue: aws_sqs.Queue,
         monitoring_topic: aws_sns.ITopic,
+        upload_bucket: aws_s3.Bucket,
+        text_workflow: aws_stepfunctions.StateMachine,
+        image_workflow: aws_stepfunctions.StateMachine,
     ) -> aws_lambda.Function:
         """Create lambda function that starts the moderation flows
         based on the uploaded file type
@@ -412,10 +421,14 @@ class ModerationStack(Stack):
         Args:
             source_queue (aws_sqs.Queue): SQS queue that contains S3 object created events
             monitoring_topic (aws_sns.ITopic): SNS topic used to send alarm notifications
+            upload_bucket (aws_s3.Bucket): Upload bucket
+            text_workflow (aws_stepfunctions.StateMachine): Text moderation workflow
+            image_workflow (aws_stepfunctions.StateMachine): Image moderation workflow
 
         Returns:
             aws_lambda.Function: Lambda function
         """
+
         start_moderation_lambda = aws_lambda.Function(
             self,
             id='start-moderation-lambda',
@@ -430,6 +443,10 @@ class ModerationStack(Stack):
             handler='lambda_function.lambda_handler',
             memory_size=128,
             timeout=Duration.seconds(5),
+            environment={
+                'TEXT_WORKFLOW_ARN': text_workflow.state_machine_arn,
+                'IMAGE_WORKFLOW_ARN': image_workflow.state_machine_arn,
+            },
         )
         Tags.of(scope=start_moderation_lambda
                ).add('Name', 'ModerationPlatform-startModeration')
@@ -477,6 +494,25 @@ class ModerationStack(Stack):
                 queue=source_queue,
                 batch_size=1,
                 enabled=True,
+            )
+        )
+
+        # Grant permissions to start Step Functions executions
+        start_moderation_lambda.add_to_role_policy(
+            aws_iam.PolicyStatement(
+                actions=["states:StartExecution"],
+                resources=[
+                    text_workflow.state_machine_arn,
+                    image_workflow.state_machine_arn
+                ]
+            )
+        )
+
+        # Grant permission to read files from the upload bucket
+        start_moderation_lambda.add_to_role_policy(
+            aws_iam.PolicyStatement(
+                actions=['s3:GetObject'],
+                resources=[f'{upload_bucket.bucket_arn}/*']
             )
         )
 

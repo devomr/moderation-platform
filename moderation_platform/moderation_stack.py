@@ -18,6 +18,7 @@ from aws_cdk import (
     aws_stepfunctions,
     aws_stepfunctions_tasks,
     aws_logs,
+    aws_iam,
 )
 
 # Local imports
@@ -92,6 +93,165 @@ class ModerationStack(Stack):
         self.create_text_moderation_workflow(
             human_workflow_arn=human_workflow_arn
         )
+
+        self.create_image_moderation_workflow(upload_bucket=upload_bucket)
+
+    def create_image_moderation_workflow(
+        self, upload_bucket: aws_s3.IBucket
+    ) -> aws_stepfunctions.StateMachine:
+        """Create a Step Function workflow for image moderation
+        
+        This workflow uses Amazon Rekognition to detect moderation labels and text
+        in image content and evaluates the results to determine appropriate actions.
+        
+        Args:
+            upload_bucket (aws_s3.IBucket): S3 bucket containing the images to moderate
+
+        Returns:
+            aws_stepfunctions.StateMachine: Step Functions state machine for image moderation
+        """
+        # Define the task to detect moderation labels using Amazon Rekognition
+        detect_moderation_labels_task = aws_stepfunctions_tasks.CallAwsService(
+            self,
+            id='DetectModerationLabels',
+            service='rekognition',
+            action='detectModerationLabels',
+            parameters={
+                'Image':
+                    {
+                        'S3Object':
+                            {
+                                'Bucket':
+                                    upload_bucket.bucket_name,
+                                'Name':
+                                    aws_stepfunctions.JsonPath
+                                    .string_at('$.objectKey')
+                            }
+                    },
+                'MinConfidence': 50
+            },
+            result_path='$.moderationLabelsResult',
+            iam_resources=['*']
+        )
+
+        # Define the task to detect text in images using Amazon Rekognition
+        detect_text_task = aws_stepfunctions_tasks.CallAwsService(
+            self,
+            id='DetectText',
+            service='rekognition',
+            action='detectText',
+            parameters={
+                'Image':
+                    {
+                        'S3Object':
+                            {
+                                'Bucket':
+                                    upload_bucket.bucket_name,
+                                'Name':
+                                    aws_stepfunctions.JsonPath
+                                    .string_at('$.objectKey')
+                            }
+                    }
+            },
+            result_path='$.textDetectionResult',
+            iam_resources=['*']
+        )
+
+        # Define a task to evaluate the moderation results
+        evaluate_moderation = aws_stepfunctions.Choice(
+            self, id='EvaluateModeration'
+        )
+
+        # Define success path for approved content
+        success_state = aws_stepfunctions.Succeed(
+            self, id='ImageApproved', comment='Image passed moderation checks'
+        )
+
+        # Define a task to handle inappropriate content
+        handle_inappropriate_content = aws_stepfunctions.Pass(
+            self,
+            id='HandleInappropriateContent',
+            result_path='$.moderationDecision',
+            parameters={
+                'decision': 'REJECTED',
+                'reason': 'Image contains inappropriate content',
+                'timestamp.$': '$$.Execution.StartTime'
+            }
+        )
+
+        workflow_end = aws_stepfunctions.Succeed(
+            self,
+            id='ImageModerationComplete',
+            comment='Image moderation workflow completed'
+        )
+
+        # Create a parallel state to run both Rekognition tasks simultaneously
+        parallel_tasks = aws_stepfunctions.Parallel(
+            self,
+            id='ParallelRekognitionTasks',
+            result_path='$.parallelResults'
+        )
+
+        # Add branches to the parallel state
+        parallel_tasks.branch(detect_moderation_labels_task)
+        parallel_tasks.branch(detect_text_task)
+
+        # Connect the workflow steps
+        workflow_definition = parallel_tasks.next(
+            evaluate_moderation.when(
+                aws_stepfunctions.Condition.or_(
+                    aws_stepfunctions.Condition.is_present(
+                        '$.parallelResults[0].moderationLabelsResult.ModerationLabels[0]'
+                    ),
+                    aws_stepfunctions.Condition.is_present(
+                        '$.parallelResults[0].textDetectionResult.TextDetections[0]'
+                    )
+                ), handle_inappropriate_content.next(workflow_end)
+            ).otherwise(success_state)
+        )
+
+        # Create the state machine with error handling
+        state_machine = aws_stepfunctions.StateMachine(
+            self,
+            id='image-moderation-workflow',
+            state_machine_name='ModerationPlatform-imageModerationWorkflow',
+            definition=workflow_definition,
+            timeout=Duration.minutes(5),
+            logs=aws_stepfunctions.LogOptions(
+                destination=aws_logs.LogGroup(
+                    self,
+                    id='ImageModerationLogGroup',
+                    log_group_name=
+                    '/aws/states/ModerationPlatform-imageModerationWorkflow',
+                    retention=aws_logs.RetentionDays.ONE_WEEK,
+                    removal_policy=RemovalPolicy.DESTROY
+                ),
+                level=aws_stepfunctions.LogLevel.ALL
+            )
+        )
+
+        # Grant the state machine permissions to access S3 and Rekognition
+        state_machine.add_to_role_policy(
+            aws_iam.PolicyStatement(
+                actions=[
+                    "rekognition:DetectModerationLabels",
+                    "rekognition:DetectText"
+                ],
+                resources=["*"]
+            )
+        )
+
+        state_machine.add_to_role_policy(
+            aws_iam.PolicyStatement(
+                actions=["s3:GetObject"],
+                resources=[f"{upload_bucket.bucket_arn}/*"]
+            )
+        )
+
+        Tags.of(state_machine
+               ).add('Name', 'ModerationPlatform-imageModerationWorkflow')
+
+        return state_machine
 
     def create_text_moderation_workflow(
         self, human_workflow_arn: str

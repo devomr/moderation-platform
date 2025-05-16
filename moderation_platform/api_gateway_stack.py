@@ -95,6 +95,7 @@ class ApiGatewayStack(Stack):
             handler='lambda_function.lambda_handler',
             memory_size=128,
             timeout=Duration.seconds(10),
+            tracing=aws_lambda.Tracing.ACTIVE,
             environment={
                 'UPLOAD_BUCKET': upload_bucket_name,
             },

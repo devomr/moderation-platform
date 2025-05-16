@@ -223,6 +223,7 @@ class ModerationStack(Stack):
             state_machine_name='ModerationPlatform-imageModerationWorkflow',
             definition=workflow_definition,
             timeout=Duration.minutes(5),
+            tracing_enabled=True,
             logs=aws_stepfunctions.LogOptions(
                 destination=aws_logs.LogGroup(
                     self,
@@ -389,6 +390,7 @@ class ModerationStack(Stack):
             state_machine_name='ModerationPlatform-textModerationWorkflow',
             definition=workflow_definition,
             timeout=Duration.minutes(5),
+            tracing_enabled=True,
             logs=aws_stepfunctions.LogOptions(
                 destination=aws_logs.LogGroup(
                     self,
@@ -443,6 +445,7 @@ class ModerationStack(Stack):
             handler='lambda_function.lambda_handler',
             memory_size=128,
             timeout=Duration.seconds(5),
+            tracing=aws_lambda.Tracing.ACTIVE,
             environment={
                 'TEXT_WORKFLOW_ARN': text_workflow.state_machine_arn,
                 'IMAGE_WORKFLOW_ARN': image_workflow.state_machine_arn,

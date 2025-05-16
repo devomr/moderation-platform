@@ -57,7 +57,7 @@ class ApiGatewayStack(Stack):
 
         # add endpoint for generating the presigned URL used to upload files
         generate_presigned_url = rest_api.root.add_resource(
-            path_part='generate_presigned_url'
+            path_part='generate-presigned-url'
         )
         generate_presigned_url.add_method(
             http_method='POST',

@@ -15,6 +15,11 @@
     ]
   },
   "context": {
+    "ModerationPlatform": {
+      "AccountId": "389041481867",
+      "Region": "us-east-1",
+      "HumanWorkflowArn": "arn:aws:sagemaker:us-east-1:389041481867:flow-definition/hitl-workflow"
+    },
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/core:target-partitions": [
